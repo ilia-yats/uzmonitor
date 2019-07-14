@@ -46,7 +46,7 @@ class UzMonitorRun extends Command
 
         while(true) {
 
-            $this->output->writeln('New request...');
+            $this->output->writeln(date('d.m H:i:s').' New request...');
 
             $data = [
                 'from' => $fromCode,
