@@ -69,7 +69,7 @@ class UzMonitorCreate extends Command
 
         $this->output->writeln($this->createInputFromArguments(array_merge(['command' => $runCommand], $arguments, $options)));
 
-        $this->call($runCommand, array_merge($arguments, $options));
+        //$this->call($runCommand, array_merge($arguments, $options));
     }
 
     protected function getCityOptions($term)

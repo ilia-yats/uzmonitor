@@ -60,8 +60,15 @@ class UzMonitorRun extends Command
 
             if (($trainsResponse = json_decode($trainsResponseJson, true)) && isset($trainsResponse['captcha'])) {
                 file_put_contents('captcha.jpg', $this->webClient->get('https://booking.uz.gov.ua/ru/captcha/'));
+
+                // mac version
                 exec('open captcha.jpg');
                 exec('say "Bypass the captcha, please"');
+
+                // termux version
+                exec('termux-open captcha.jpg');
+                exec('termux-notification --content "Bypass the captcha please"');
+
                 $captchaCode = $this->ask('Please enter symbols from image:');
 
                 $trainsResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_search/', array_merge($data, [
@@ -69,113 +76,130 @@ class UzMonitorRun extends Command
                 ]));
             }
 
-            $this->output->writeln('Response:');
-            $this->output->writeln($trainsResponseJson);
+            //$this->output->writeln('Response:');
+            //$this->output->writeln($trainsResponseJson);
 
-            if (($trainsResponse = json_decode($trainsResponseJson, true)) && ($trainsData = $trainsResponse['data'] ?? null)) {
+            if (empty($trainsResponse = json_decode($trainsResponseJson, true)) || empty($trainsData = $trainsResponse['data'] ?? null)) {
+                $this->notifyUnexpectedResponse($trainsResponseJson);
 
-                if (!empty($trainsList = $trainsData['list'] ?? null)) {
-                    $matchedTrains = $this->withFreePlaces(
-                        $this->matchedDepartureTime(
-                            $this->matchedPlacesTypes(
-                                $this->matchedTrainNumbers(
-                                    $trainsList,
-                                    $trainNumbers
-                                ),
-                                $placesTypes
+                return;
+            }
+
+            if (!empty($trainsList = $trainsData['list'] ?? null)) {
+                $matchedTrains = $this->withFreePlaces(
+                    $this->matchedDepartureTime(
+                        $this->matchedPlacesTypes(
+                            $this->matchedTrainNumbers(
+                                $trainsList,
+                                $trainNumbers
                             ),
-                            $minTime
-                        )
-                    );
+                            $placesTypes
+                        ),
+                        $minTime
+                    )
+                );
 
-                    if (!empty($matchedTrains)) {
-                        $train = reset($matchedTrains);
+                if (!empty($matchedTrains)) {
+                    $train = reset($matchedTrains);
 
-                        $this->output->writeln('Get wagons');
+                    $this->output->writeln('Get wagons');
 
-                        $wagonsResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_wagons/', array_merge($data, [
+                    $wagonsResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_wagons/', array_merge($data, [
+                        'train' => $train['num'],
+                        'wagon_type_id' => $train['types'][0]['id'],
+                        'get_tpl' => 1,
+                    ]));
+
+                    if (empty($wagonsResponse = json_decode($wagonsResponseJson, true)) || empty($wagonsData = $wagonsResponse['data'] ?? null)) {
+                        $this->notifyUnexpectedResponse($wagonsResponseJson);
+
+                        return;
+                    }
+
+                    if (!empty($wagonsList = $wagonsData['wagons'])) {
+                        $wagon = reset($wagonsData['wagons']);
+
+                        $this->output->writeln('Get places');
+
+                        $wagonResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_wagon/', array_merge($data, [
                             'train' => $train['num'],
-                            'wagon_type_id' => $train['types'][0]['id'],
-                            'get_tpl' => 1,
+                            'wagon_num' =>  $wagon['num'],
+                            'wagon_type' =>  $wagon['type'],
+                            'wagon_class' =>  $wagon['class'],
+                            //'cached_scheme[]' => К01,
                         ]));
 
-                        if (($wagonsResponse = json_decode($wagonsResponseJson, true)) && ($wagonsData = $wagonsResponse['data'] ?? null)) {
-                            if (!empty($wagonsList = $wagonsData['wagons'])) {
-                                $wagon = reset($wagonsData['wagons']);
+                        if (empty($wagonResponse = json_decode($wagonResponseJson, true)) || empty($wagonData = $wagonResponse['data'] ?? null)) {
+                            $this->notifyUnexpectedResponse($wagonResponseJson);
 
-                                $this->output->writeln('Get places');
+                            return;
+                        }
 
-                                $wagonResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_wagon/', array_merge($data, [
-                                    'train' => $train['num'],
-                                    'wagon_num' =>  $wagon['num'],
-                                    'wagon_type' =>  $wagon['type'],
-                                    'wagon_class' =>  $wagon['class'],
-                                    //'cached_scheme[]' => К01,
-                                ]));
-
-                                if (($wagonResponse = json_decode($wagonResponseJson, true)) && ($wagonData = $wagonResponse['data'] ?? null)) {
-                                    $placesNumbers = [];
-                                    $placesData = reset($wagonData['places']);
-                                    foreach ($passengersNames as $i => $fullName) {
-                                        if (isset($placesData[$i])) {
-                                            $placesNumbers[$fullName] = $placesData[$i];
-                                        } else {
-                                            break;
-                                        }
-                                    }
-
-                                    $placesRequest = [];
-                                    $i = 0;
-                                    foreach ($placesNumbers as $fullName => $placeNumber) {
-                                        [$firstName, $lastName] = explode(' ', $fullName);
-                                        $placesRequest[] = [
-                                            'ord' => $i,
-                                            'from' => $fromCode,
-                                            'to' => $toCode,
-                                            'train' => $train['num'],
-                                            'date' => $date,
-                                            'wagon_num' => $wagon['num'],
-                                            'wagon_class' => $wagon['class'],
-                                            'wagon_type' => $wagon['type'],
-                                            'wagon_railway' => $wagon['railway'],
-                                            'charline' => 'A',
-                                            'firstname' => $firstName,
-                                            'lastname' => $lastName,
-                                            'bedding' => '1',
-                                            'services' => ['M'],
-                                            'child' => '', //
-                                            'student' => '', //
-                                            'reserve' => 0, // 0
-                                            'place_num' => $placeNumber
-                                        ];
-                                        $i++;
-                                    }
-
-                                    $this->output->writeln('Put places to cart');
-
-                                    $this->webClient->post('https://booking.uz.gov.ua/ru/cart/add/', [
-                                        'places' => $placesRequest
-                                    ]);
-
-                                    for ($i = 0; $i < 5; $i++) {
-                                        exec('say "Tickets in you cart!"');
-                                        sleep(2);
-                                    }
-
-                                    $this->output->writeln('Ticket put in cart: session id '.$this->webClient->sessionId);
-
-                                    return;
-                                }
+                        $placesNumbers = [];
+                        $placesData = reset($wagonData['places']);
+                        foreach ($passengersNames as $i => $fullName) {
+                            if (isset($placesData[$i])) {
+                                $placesNumbers[$fullName] = $placesData[$i];
+                            } else {
+                                break;
                             }
                         }
+
+                        $placesRequest = [];
+                        $i = 0;
+                        foreach ($placesNumbers as $fullName => $placeNumber) {
+                            [$firstName, $lastName] = explode(' ', $fullName);
+                            $placesRequest[] = [
+                                'ord' => $i,
+                                'from' => $fromCode,
+                                'to' => $toCode,
+                                'train' => $train['num'],
+                                'date' => $date,
+                                'wagon_num' => $wagon['num'],
+                                'wagon_class' => $wagon['class'],
+                                'wagon_type' => $wagon['type'],
+                                'wagon_railway' => $wagon['railway'],
+                                'charline' => 'A',
+                                'firstname' => $firstName,
+                                'lastname' => $lastName,
+                                'bedding' => '1',
+                                'services' => ['M'],
+                                'child' => '', //
+                                'student' => '', //
+                                'reserve' => 0, // 0
+                                'place_num' => $placeNumber
+                            ];
+                            $i++;
+                        }
+
+                        $this->output->writeln('Put places to cart');
+
+                        $this->webClient->post('https://booking.uz.gov.ua/ru/cart/add/', [
+                            'places' => $placesRequest
+                        ]);
+
+                        $this->output->writeln('Ticket put in cart: session id '.$this->webClient->sessionId);
+
+                        for ($i = 0; $i < 5; $i++) {
+                            // mac version
+                            exec('say "Tickets in you cart!"');
+
+                            // terux version (for android)
+                            exec('termux-vibrate 2000');
+                            exec('termux-notification --content "Tickets in you cart!"');
+
+                            sleep(2);
+                        }
+
+                        return;
                     }
                 }
+            }
 
-                sleep(rand(5, 10));
+            sleep(rand(5, 10));
 
-                if (!empty($trainsData['warning'])) {
-                    $this->output->writeln($trainsData['warning']);
-                }
+            if (!empty($trainsData['warning'])) {
+                $this->output->writeln($trainsData['warning']);
             }
         }
     }
@@ -210,5 +234,16 @@ class UzMonitorRun extends Command
         return is_null($trainNumbers) ? $trains : array_filter($trains, function(array $train) use($trainNumbers) {
             return in_array($train['num'], $trainNumbers);
         });
+    }
+
+    protected function notifyUnexpectedResponse(string $response)
+    {
+        // mac version
+        exec('say "Unexpected response!"');
+        // termux version
+        exec('termux-vibrate 5000');
+
+        $this->output->writeln('Unexpected response!');
+        $this->output->writeln($response);
     }
 }
