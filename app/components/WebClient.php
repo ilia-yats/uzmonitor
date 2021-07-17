@@ -37,7 +37,11 @@ class WebClient
             "http" => [
                 "method" => "GET",
                 "header" => implode("\r\n", $headers ?: $this->headers()),
-            ]
+            ],
+            "ssl" => [
+                "verify_peer" => false,
+                "verify_peer_name" => false,
+            ],
         ];
         $context = stream_context_create($opts);
 
@@ -57,14 +61,18 @@ class WebClient
         return $response;
     }
 
-    public function post(string $url, array $data, array $headers = null): string
+    public function post(string $url, $data, array $headers = null, bool $raw = false): string
     {
         $opts = [
             "http" => [
                 "method" => "POST",
                 "header" => implode("\r\n", $headers ?: $this->headers()),
-                "content" => http_build_query($data)
-            ]
+                "content" => $raw ? $data : http_build_query($data)
+            ],
+            "ssl" => [
+                "verify_peer" => false,
+                "verify_peer_name" => false,
+            ],
         ];
         $context = stream_context_create($opts);
 

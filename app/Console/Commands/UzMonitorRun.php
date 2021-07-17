@@ -59,25 +59,61 @@ class UzMonitorRun extends Command
             $trainsResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_search/', $data);
 
             if (($trainsResponse = json_decode($trainsResponseJson, true)) && isset($trainsResponse['captcha'])) {
-                file_put_contents('captcha.jpg', $this->webClient->get('https://booking.uz.gov.ua/ru/captcha/'));
+                $this->output->writeln('Got captcha!');
+                $this->output->writeln('Trying to bypass...');
 
-                // mac version
-                exec('open captcha.jpg');
-                exec('say "Bypass the captcha, please"');
+                $antiCacheKey = explode(' ', microtime())[0];
+                file_put_contents('captcha.jpg', $this->webClient->get('https://booking.uz.gov.ua/ru/captcha/?key='.$antiCacheKey));
+                file_put_contents('captcha.ogg', $this->webClient->get('https://booking.uz.gov.ua/ru/captcha/audio/?type=ogg&key='.$antiCacheKey));
 
-                // termux version
-                exec('termux-open captcha.jpg');
-                exec('termux-notification --content "Bypass the captcha please"');
+                exec(' ffmpeg -y -hide_banner -loglevel error -i captcha.ogg captcha.wav');
 
-                $captchaCode = $this->ask('Please enter symbols from image:');
+                $this->output->writeln('Captcha saved and converted');
+
+                $azureSstToken = $this->webClient->post(
+                    'https://northeurope.api.cognitive.microsoft.com/sts/v1.0/issuetoken',
+                    [],
+                    [
+                        'Content-type: application/x-www-form-urlencoded',
+                        'Content-Length: 0',
+                        'Ocp-Apim-Subscription-Key: b94e841aa8c243528fe7ba19f1fc7068'
+                    ],
+                    true
+                );
+
+//                $this->output->writeln('Got azure token: ');
+//                $this->output->writeln($azureSstToken);
+
+                $captchaRecognitionResponse = $this->webClient->post(
+                    'https://northeurope.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=ru-RU',
+                    file_get_contents('captcha.wav'),
+                    [
+                        'Content-Type: audio/wave',
+                        'Authorization: Bearer ' . $azureSstToken
+                    ],
+                    true
+                );
+
+//                $this->output->writeln('Recognition API response:');
+//                $this->output->writeln($captchaRecognitionResponse);
+
+                $recognitionData = json_decode($captchaRecognitionResponse, true);
+                $captchaText = $recognitionData['DisplayText'];
+
+                $captchaText = mb_strtolower($captchaText);
+                $captchaText = str_replace(
+                    ['один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'],
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+                    $captchaText
+                );
+                $captchaText = preg_replace('~\D~', '', $captchaText);
+
+                $this->output->writeln('Resend with captcha text: ' . $captchaText);
 
                 $trainsResponseJson = $this->webClient->post('https://booking.uz.gov.ua/ru/train_search/', array_merge($data, [
-                    'captcha' => $captchaCode
+                    'captcha' => $captchaText
                 ]));
             }
-
-            //$this->output->writeln('Response:');
-            //$this->output->writeln($trainsResponseJson);
 
             if (empty($trainsResponse = json_decode($trainsResponseJson, true)) || empty($trainsData = $trainsResponse['data'] ?? null)) {
                 $this->notifyUnexpectedResponse($trainsResponseJson);
@@ -184,7 +220,7 @@ class UzMonitorRun extends Command
                             // mac version
                             exec('say "Tickets in you cart!"');
 
-                            // terux version (for android)
+                            // termux version (for android)
                             exec('termux-vibrate 2000');
                             exec('termux-notification --content "Tickets in you cart!"');
 
